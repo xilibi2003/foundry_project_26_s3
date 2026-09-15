@@ -1,0 +1,21 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+fs_permissions = [
+    { access = "write", path = "./deployments" }
+]
+
+[rpc_endpoints]
+sepolia = "${SEPOLIA_RPC_URL}"
+base-sepolia = "${SEPOLIA_BASE_RPC_URL}"
+polygon = "${POLYGON_RPC_URL}"
+local = "http://127.0.0.1:8545"
+optimism = "${OPTIMISM_RPC_URL}"
+mainnet = "https://ethereum-mainnet.gateway.tatum.io"
+
+[etherscan]
+sepolia = { key = "${ETHER_SCAN_APIKEY}" }
