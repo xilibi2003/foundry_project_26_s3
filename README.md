@@ -67,3 +67,9 @@ $ cast --help
 
 
 forge script script/MyERC20.s.sol --keystore key/2026s3 --rpc-url http://localhost:8545 --broadcast
+
+
+查询账号地址：
+```
+cast wallet address --account mytoken-sepolia
+```

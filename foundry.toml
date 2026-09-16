@@ -14,7 +14,7 @@ sepolia = "${SEPOLIA_RPC_URL}"
 base-sepolia = "${SEPOLIA_BASE_RPC_URL}"
 polygon = "${POLYGON_RPC_URL}"
 local = "http://127.0.0.1:8545"
-optimism = "${OPTIMISM_RPC_URL}"
+optimism = "${OP_RPC_URL}"
 mainnet = "https://ethereum-mainnet.gateway.tatum.io"
 
 [etherscan]
