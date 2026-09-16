@@ -13,6 +13,7 @@ contract DeployBootCampS2Script is Script {
 
         vm.startBroadcast();
         nft = new BootCampS2();
+
         tokenId = nft.mint(recipient, tokenUri);
         vm.stopBroadcast();
     }

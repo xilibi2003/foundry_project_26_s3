@@ -73,3 +73,6 @@ forge script script/MyERC20.s.sol --keystore key/2026s3 --rpc-url http://localho
 ```
 cast wallet address --account mytoken-sepolia
 ```
+
+
+0.000000000273648349
