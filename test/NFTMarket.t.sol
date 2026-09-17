@@ -3,12 +3,12 @@ pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
 import {NFTMarket} from "../src/NFTMarket.sol";
-import {MyERC20} from "../src/MyERC20.sol";
+import {CalledToken} from "../src/CalledToken.sol";
 import {MyERC721} from "../src/MyERC721.sol";
 
 contract NFTMarketTest is Test {
     NFTMarket public market;
-    MyERC20 public token;
+    CalledToken public token;
     MyERC721 public nft;
 
     address public seller = makeAddr("seller");
@@ -22,11 +22,11 @@ contract NFTMarketTest is Test {
     event NFTDelisted(address indexed seller, uint256 indexed tokenId);
 
     function setUp() public {
-        // 部署代币和 NFT 合约
-        token = new MyERC20("MyToken", "MTK");
+        // 部署 CalledToken 和 MyERC721 NFT 合约
+        token = new CalledToken("CalledToken", "CTK");
         nft = new MyERC721();
 
-        // 部署市场合约
+        // 部署市场合约，使用 CalledToken 作为支付代币
         market = new NFTMarket(address(token), address(nft));
 
         // 给买家分配代币
@@ -74,8 +74,83 @@ contract NFTMarketTest is Test {
         vm.stopPrank();
     }
 
-    /// @dev 验证买家成功购买 NFT
-    function test_BuyNFT_Success() public {
+    /// @dev 验证买家通过 transferAndCall 一步购买 NFT（无需提前 approve）
+    function test_BuyNFT_ViaTransferAndCall_Success() public {
+        // 1. 卖家上架
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        // 2. 买家调用 transferAndCall(market, price, abi.encode(tokenId)) 一步购买
+        vm.startPrank(buyer);
+        vm.expectEmit(true, true, true, true, address(market));
+        emit NFTSold(buyer, seller, 1, NFT_PRICE);
+
+        bytes memory data = abi.encode(uint256(1));
+        bool success = token.transferAndCall(address(market), NFT_PRICE, data);
+        assertTrue(success, "transferAndCall failed");
+        vm.stopPrank();
+
+        // 验证 NFT 所有权转移给买家
+        assertEq(nft.ownerOf(1), buyer, "Buyer should own the NFT");
+
+        // 验证代币转账：卖家获得代币，买家扣除代币
+        assertEq(token.balanceOf(seller), NFT_PRICE, "Seller should receive tokens");
+        assertEq(token.balanceOf(buyer), INITIAL_BALANCE - NFT_PRICE, "Buyer token balance mismatch");
+        assertEq(token.balanceOf(address(market)), 0, "Market should have zero token balance");
+
+        // 验证上架记录已清除
+        (address listedSeller, uint256 listedPrice) = market.getListing(1);
+        assertEq(listedSeller, address(0));
+        assertEq(listedPrice, 0);
+    }
+
+    /// @dev 验证买家通过 transferAndCall 多付代币时，市场自动退还多余代币
+    function test_BuyNFT_ViaTransferAndCall_WithRefund() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        uint256 overpayAmount = NFT_PRICE + 20 * 1e18; // 多付 20 个代币
+
+        vm.startPrank(buyer);
+        bytes memory data = abi.encode(uint256(1));
+        token.transferAndCall(address(market), overpayAmount, data);
+        vm.stopPrank();
+
+        // 卖家获得定价值
+        assertEq(token.balanceOf(seller), NFT_PRICE);
+        // 买家只扣除定价值，多余 20 个代币已被退还
+        assertEq(token.balanceOf(buyer), INITIAL_BALANCE - NFT_PRICE);
+        assertEq(token.balanceOf(address(market)), 0);
+        assertEq(nft.ownerOf(1), buyer);
+    }
+
+    /// @dev 验证 transferAndCall 支付金额不足时回滚
+    function test_RevertWhen_TransferAndCallInsufficientAmount() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        vm.startPrank(buyer);
+        bytes memory data = abi.encode(uint256(1));
+        vm.expectRevert("CalledToken: tokensReceived call failed");
+        token.transferAndCall(address(market), 50 * 1e18, data);
+        vm.stopPrank();
+    }
+
+    /// @dev 验证非代币合约直接调用 tokensReceived 时回滚
+    function test_RevertWhen_NonTokenCallsTokensReceived() public {
+        vm.prank(buyer);
+        vm.expectRevert("NFTMarket: caller must be payment token");
+        market.tokensReceived(buyer, NFT_PRICE, abi.encode(1));
+    }
+
+    /// @dev 验证传统方式买家成功购买 NFT (approve + buyNFT)
+    function test_BuyNFT_Traditional_Success() public {
         // 1. 卖家上架
         vm.startPrank(seller);
         nft.approve(address(market), 1);
@@ -91,10 +166,8 @@ contract NFTMarketTest is Test {
         market.buyNFT(1, NFT_PRICE);
         vm.stopPrank();
 
-        // 验证 NFT 所有权转移给买家
+        // 验证所有权和代币流转
         assertEq(nft.ownerOf(1), buyer, "Buyer should own the NFT");
-
-        // 验证代币转账
         assertEq(token.balanceOf(seller), NFT_PRICE, "Seller should receive tokens");
         assertEq(token.balanceOf(buyer), INITIAL_BALANCE - NFT_PRICE, "Buyer token balance mismatch");
 
@@ -104,15 +177,13 @@ contract NFTMarketTest is Test {
         assertEq(listedPrice, 0);
     }
 
-    /// @dev 验证购买金额不足时回滚
+    /// @dev 验证传统购买金额不足时回滚
     function test_RevertWhen_BuyWithInsufficientAmount() public {
-        // 卖家上架 100 token
         vm.startPrank(seller);
         nft.approve(address(market), 1);
         market.list(1, NFT_PRICE);
         vm.stopPrank();
 
-        // 买家只付 50 token
         vm.startPrank(buyer);
         token.approve(address(market), NFT_PRICE);
 
@@ -138,7 +209,7 @@ contract NFTMarketTest is Test {
         market.list(1, NFT_PRICE);
         vm.stopPrank();
 
-        // 给 seller 分配代币并尝试购买自己上架的 NFT
+        // 分配代币给卖家并尝试自买
         token.transfer(seller, NFT_PRICE);
 
         vm.startPrank(seller);
