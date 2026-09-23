@@ -13,6 +13,8 @@ contract NFTMarketTest is Test {
 
     address public seller = makeAddr("seller");
     address public buyer = makeAddr("buyer");
+    address public admin;
+    uint256 public adminPrivateKey;
 
     uint256 public constant INITIAL_BALANCE = 10000 * 1e18;
     uint256 public constant NFT_PRICE = 100 * 1e18; // 100 tokens
@@ -22,12 +24,15 @@ contract NFTMarketTest is Test {
     event NFTDelisted(address indexed seller, uint256 indexed tokenId);
 
     function setUp() public {
+        (admin, adminPrivateKey) = makeAddrAndKey("admin");
+
         // 部署 CalledToken 和 MyERC721 NFT 合约
         token = new CalledToken("CalledToken", "CTK");
         nft = new MyERC721();
 
         // 部署市场合约，使用 CalledToken 作为支付代币
         market = new NFTMarket(address(token), address(nft));
+        market.setAdmin(admin);
 
         // 给买家分配代币
         token.transfer(buyer, INITIAL_BALANCE);
@@ -35,6 +40,26 @@ contract NFTMarketTest is Test {
         // 给卖家铸造 NFT（tokenId = 1）
         vm.prank(seller);
         nft.mint(seller, "ipfs://sample-metadata-uri");
+    }
+
+    /// @notice 辅助函数：构造管理员对白名单用户的 EIP-712 permitBuy 签名
+    function _getPermitBuySignature(
+        uint256 signerKey,
+        address buyerAddr,
+        uint256 tokenId
+    ) internal view returns (bytes memory) {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                market.PERMIT_BUY_TYPEHASH(),
+                buyerAddr,
+                tokenId
+            )
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", market.DOMAIN_SEPARATOR(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest);
+        return abi.encodePacked(r, s, v);
     }
 
     /// @dev 验证卖家成功上架 NFT
@@ -252,4 +277,145 @@ contract NFTMarketTest is Test {
         market.cancelListing(1);
         vm.stopPrank();
     }
+
+    /// @dev 验证白名单用户通过管理员 EIP-712 签名成功 permitBuy 购买 NFT
+    function test_PermitBuy_Success() public {
+        // 1. 卖家上架 NFT
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        // 2. 买家获取管理员针对该买家和 tokenId = 1 签发的 EIP-712 白名单离线许可
+        bytes memory sig = _getPermitBuySignature(adminPrivateKey, buyer, 1);
+
+        // 3. 买家授权代币并调用 permitBuy
+        vm.startPrank(buyer);
+        token.approve(address(market), NFT_PRICE);
+
+        vm.expectEmit(true, true, true, true, address(market));
+        emit NFTSold(buyer, seller, 1, NFT_PRICE);
+        market.permitBuy(1, sig);
+        vm.stopPrank();
+
+        // 4. 验证 NFT 与代币所有权转移
+        assertEq(nft.ownerOf(1), buyer, "NFT should belong to buyer");
+        assertEq(token.balanceOf(seller), NFT_PRICE, "Seller should receive payment");
+        assertEq(token.balanceOf(buyer), INITIAL_BALANCE - NFT_PRICE, "Buyer balance mismatch");
+
+        // 验证上架信息已被清理
+        (address listedSeller, uint256 listedPrice) = market.getListing(1);
+        assertEq(listedSeller, address(0));
+        assertEq(listedPrice, 0);
+    }
+
+    /// @dev 验证带 amount 参数的 permitBuy 重载版本
+    function test_PermitBuy_WithAmount_Success() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        bytes memory sig = _getPermitBuySignature(adminPrivateKey, buyer, 1);
+
+        vm.startPrank(buyer);
+        token.approve(address(market), NFT_PRICE);
+        market.permitBuy(1, NFT_PRICE, sig);
+        vm.stopPrank();
+
+        assertEq(nft.ownerOf(1), buyer);
+    }
+
+    /// @dev 验证使用 (v, r, s) 形式签名的 permitBuy 重载版本
+    function test_PermitBuy_WithVRS_Success() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                market.PERMIT_BUY_TYPEHASH(),
+                buyer,
+                1
+            )
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", market.DOMAIN_SEPARATOR(), structHash)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(adminPrivateKey, digest);
+
+        vm.startPrank(buyer);
+        token.approve(address(market), NFT_PRICE);
+        market.permitBuy(1, v, r, s);
+        vm.stopPrank();
+
+        assertEq(nft.ownerOf(1), buyer);
+    }
+
+    /// @dev 验证非白名单用户（拿到其他人的签名）调用 permitBuy 时 revert
+    function test_RevertWhen_PermitBuy_NonWhitelistedBuyer() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        address eve = makeAddr("eve");
+        // 管理员只为 buyer 签发了白名单
+        bytes memory sigForBuyer = _getPermitBuySignature(adminPrivateKey, buyer, 1);
+
+        // 未被许可的 eve 尝试使用该签名购买
+        vm.startPrank(eve);
+        token.approve(address(market), NFT_PRICE);
+        vm.expectRevert("NFTMarket: invalid whitelist signature");
+        market.permitBuy(1, sigForBuyer);
+        vm.stopPrank();
+    }
+
+    /// @dev 验证伪造/非管理员私钥签名的 permitBuy 调用 revert
+    function test_RevertWhen_PermitBuy_ForgedSignature() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        (, uint256 attackerKey) = makeAddrAndKey("attacker");
+        bytes memory forgedSig = _getPermitBuySignature(attackerKey, buyer, 1);
+
+        vm.startPrank(buyer);
+        token.approve(address(market), NFT_PRICE);
+        vm.expectRevert("NFTMarket: invalid whitelist signature");
+        market.permitBuy(1, forgedSig);
+        vm.stopPrank();
+    }
+
+    /// @dev 验证白名单签名与购买的 tokenId 不匹配时 revert
+    function test_RevertWhen_PermitBuy_WrongTokenId() public {
+        vm.startPrank(seller);
+        nft.approve(address(market), 1);
+        market.list(1, NFT_PRICE);
+        vm.stopPrank();
+
+        // 管理员为 buyer 签发的许可是 tokenId = 2
+        bytes memory sigForToken2 = _getPermitBuySignature(adminPrivateKey, buyer, 2);
+
+        vm.startPrank(buyer);
+        token.approve(address(market), NFT_PRICE);
+        // 尝试用 tokenId = 2 的许可购买 tokenId = 1
+        vm.expectRevert("NFTMarket: invalid whitelist signature");
+        market.permitBuy(1, sigForToken2);
+        vm.stopPrank();
+    }
+
+    /// @dev 验证购买未上架的 NFT 时即便有白名单签名依然 revert
+    function test_RevertWhen_PermitBuy_UnlistedNFT() public {
+        bytes memory sig = _getPermitBuySignature(adminPrivateKey, buyer, 999);
+
+        vm.startPrank(buyer);
+        token.approve(address(market), NFT_PRICE);
+        vm.expectRevert("NFTMarket: NFT not listed");
+        market.permitBuy(999, sig);
+        vm.stopPrank();
+    }
 }
+
