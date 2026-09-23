@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@oz/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@oz/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@oz/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ISignatureTransfer} from "./ISignatureTransfer.sol";
 
 
 /**
@@ -24,17 +25,22 @@ interface ITokenReceiver {
  * 扩展支持：
  * 1. ERC1363 风格的 transferAndCall 回调入账（tokensReceived）
  * 2. EIP-2612 permit 签名授权入账（permitDeposit）
+ * 3. Uniswap Permit2 SignatureTransfer 签名授权入账（depositWithPermit2）
  */
 contract TokenBank is ITokenReceiver {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable token;
 
+    // Uniswap Permit2 官方合约地址（全网统一：0x000000000022D473030F116dDEE9F6B43aC78BA3）
+    address public permit2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
+
     // 记录每个用户存入的 token 数量
     mapping(address => uint256) public balances;
 
     event Deposit(address indexed user, uint256 amount);
     event Withdraw(address indexed user, uint256 amount);
+    event Permit2AddressUpdated(address indexed oldPermit2, address indexed newPermit2);
 
     /**
      * @param _tokenAddress 绑定的 ERC20 Token 地址
@@ -45,6 +51,16 @@ contract TokenBank is ITokenReceiver {
             "TokenBank: token address cannot be zero"
         );
         token = IERC20(_tokenAddress);
+    }
+
+    /**
+     * @notice 设置自定义 permit2 合约地址
+     * @param _permit2 新的 permit2 合约地址
+     */
+    function setPermit2(address _permit2) external {
+        require(_permit2 != address(0), "TokenBank: zero permit2 address");
+        emit Permit2AddressUpdated(permit2, _permit2);
+        permit2 = _permit2;
     }
 
     /**
@@ -116,6 +132,108 @@ contract TokenBank is ITokenReceiver {
 
         // 3. 将代币从 owner 转入 TokenBank 合约
         token.safeTransferFrom(owner, address(this), amount);
+
+        emit Deposit(owner, amount);
+    }
+
+    /**
+     * @notice 使用 Uniswap Permit2 SignatureTransfer 一步签名授权并存入代币
+     * @param permit 包含代币、存款金额、nonce 与有效期的 PermitTransferFrom 结构体
+     * @param signature 用户针对 Permit2 签发的 EIP-712 签名
+     */
+    function depositWithPermit2(
+        ISignatureTransfer.PermitTransferFrom calldata permit,
+        bytes calldata signature
+    ) external {
+        depositWithPermit2(msg.sender, permit, signature);
+    }
+
+    /**
+     * @notice 支持指定存款人（owner）的 Permit2 签名存款
+     * @param owner 存款人（代币所有者及签名者）
+     * @param permit 包含代币、存款金额、nonce 与有效期的 PermitTransferFrom 结构体
+     * @param signature 用户针对 Permit2 签发的 EIP-712 签名
+     */
+    function depositWithPermit2(
+        address owner,
+        ISignatureTransfer.PermitTransferFrom calldata permit,
+        bytes calldata signature
+    ) public {
+        require(permit.permitted.token == address(token), "TokenBank: token mismatch");
+        require(permit.permitted.amount > 0, "TokenBank: deposit amount must be > 0");
+
+        // 构造转入明细：接收地址为当前 TokenBank 合约，转入金额为 permit.permitted.amount
+        ISignatureTransfer.SignatureTransferDetails memory transferDetails = ISignatureTransfer
+            .SignatureTransferDetails({
+                to: address(this),
+                requestedAmount: permit.permitted.amount
+            });
+
+        // 调用 permit2 合约的 permitTransferFrom 执行代币划转 (SignatureTransfer)
+        ISignatureTransfer(permit2).permitTransferFrom(
+            permit,
+            transferDetails,
+            owner,
+            signature
+        );
+
+        // 记账
+        balances[owner] += permit.permitted.amount;
+
+        emit Deposit(owner, permit.permitted.amount);
+    }
+
+    /**
+     * @notice 便捷传参重载：直接传入金额、nonce、截止时间及签名
+     * @param amount 存入的代币数量
+     * @param nonce Permit2 防重放 nonce
+     * @param deadline 签名截止有效时间
+     * @param signature 用户针对 Permit2 签发的 EIP-712 签名
+     */
+    function depositWithPermit2(
+        uint256 amount,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) external {
+        depositWithPermit2(msg.sender, amount, nonce, deadline, signature);
+    }
+
+    /**
+     * @notice 便捷传参重载（指定 owner）：直接传入 owner、金额、nonce、截止时间及签名
+     */
+    function depositWithPermit2(
+        address owner,
+        uint256 amount,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) public {
+        require(amount > 0, "TokenBank: deposit amount must be > 0");
+
+        ISignatureTransfer.PermitTransferFrom memory permit = ISignatureTransfer.PermitTransferFrom({
+            permitted: ISignatureTransfer.TokenPermissions({
+                token: address(token),
+                amount: amount
+            }),
+            nonce: nonce,
+            deadline: deadline
+        });
+
+        ISignatureTransfer.SignatureTransferDetails memory transferDetails = ISignatureTransfer
+            .SignatureTransferDetails({
+                to: address(this),
+                requestedAmount: amount
+            });
+
+        ISignatureTransfer(permit2).permitTransferFrom(
+            permit,
+            transferDetails,
+            owner,
+            signature
+        );
+
+        balances[owner] += amount;
 
         emit Deposit(owner, amount);
     }
