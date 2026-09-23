@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@oz/contracts/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "@oz/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@oz/contracts/token/ERC20/utils/SafeERC20.sol";
 
 
@@ -20,7 +21,9 @@ interface ITokenReceiver {
 /**
  * @title TokenBank
  * @dev 允许存入和提取指定 ERC20 代币的银行合约
- * 扩展支持 ERC1363 风格的 transferAndCall 回调入账（tokensReceived）
+ * 扩展支持：
+ * 1. ERC1363 风格的 transferAndCall 回调入账（tokensReceived）
+ * 2. EIP-2612 permit 签名授权入账（permitDeposit）
  */
 contract TokenBank is ITokenReceiver {
     using SafeERC20 for IERC20;
@@ -58,6 +61,63 @@ contract TokenBank is ITokenReceiver {
         token.safeTransferFrom(msg.sender, address(this), amount);
 
         emit Deposit(msg.sender, amount);
+    }
+
+    /**
+     * @notice 通过 EIP-2612 permit 签名授权并完成存款（一步操作，调用方即为存款人）
+     * @param amount 存入的代币数量
+     * @param deadline 签名截止时间
+     * @param v 签名参数 v
+     * @param r 签名参数 r
+     * @param s 签名参数 s
+     */
+    function permitDeposit(
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        permitDeposit(msg.sender, amount, deadline, v, r, s);
+    }
+
+    /**
+     * @notice 支持指定存款人（owner）的 permit 存款，支持第三方 Relayer 提交
+     * @param owner 实际扣款和入账的存款人地址
+     * @param amount 存入的代币数量
+     * @param deadline 签名截止时间
+     * @param v 签名参数 v
+     * @param r 签名参数 r
+     * @param s 签名参数 s
+     */
+    function permitDeposit(
+        address owner,
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) public {
+        require(amount > 0, "TokenBank: deposit amount must be > 0");
+
+        // 1. 调用代币的 permit 进行签名授权，将当前 TokenBank 合约设为 spender
+        IERC20Permit(address(token)).permit(
+            owner,
+            address(this),
+            amount,
+            deadline,
+            v,
+            r,
+            s
+        );
+
+        // 2. 记账
+        balances[owner] += amount;
+
+        // 3. 将代币从 owner 转入 TokenBank 合约
+        token.safeTransferFrom(owner, address(this), amount);
+
+        emit Deposit(owner, amount);
     }
 
     /**
