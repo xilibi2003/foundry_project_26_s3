@@ -86,7 +86,7 @@ contract NFTMarketTest is Test {
         vm.startPrank(seller);
         nft.approve(address(market), 1);
 
-        vm.expectRevert("NFTMarket: price must be greater than 0");
+        vm.expectRevert(NFTMarket.PriceZero.selector);
         market.list(1, 0);
         vm.stopPrank();
     }
@@ -94,7 +94,7 @@ contract NFTMarketTest is Test {
     /// @dev 验证非持有者上架时回滚
     function test_RevertWhen_ListNotOwner() public {
         vm.startPrank(buyer);
-        vm.expectRevert("NFTMarket: caller is not NFT owner");
+        vm.expectRevert(NFTMarket.NotOwner.selector);
         market.list(1, NFT_PRICE);
         vm.stopPrank();
     }
@@ -170,7 +170,7 @@ contract NFTMarketTest is Test {
     /// @dev 验证非代币合约直接调用 tokensReceived 时回滚
     function test_RevertWhen_NonTokenCallsTokensReceived() public {
         vm.prank(buyer);
-        vm.expectRevert("NFTMarket: caller must be payment token");
+        vm.expectRevert(NFTMarket.CallerNotPaymentToken.selector);
         market.tokensReceived(buyer, NFT_PRICE, abi.encode(1));
     }
 
@@ -212,7 +212,7 @@ contract NFTMarketTest is Test {
         vm.startPrank(buyer);
         token.approve(address(market), NFT_PRICE);
 
-        vm.expectRevert("NFTMarket: payment amount too low");
+        vm.expectRevert(NFTMarket.InsufficientPayment.selector);
         market.buyNFT(1, 50 * 1e18);
         vm.stopPrank();
     }
@@ -222,7 +222,7 @@ contract NFTMarketTest is Test {
         vm.startPrank(buyer);
         token.approve(address(market), NFT_PRICE);
 
-        vm.expectRevert("NFTMarket: NFT not listed");
+        vm.expectRevert(NFTMarket.NotListed.selector);
         market.buyNFT(1, NFT_PRICE);
         vm.stopPrank();
     }
@@ -240,7 +240,7 @@ contract NFTMarketTest is Test {
         vm.startPrank(seller);
         token.approve(address(market), NFT_PRICE);
 
-        vm.expectRevert("NFTMarket: buyer cannot be seller");
+        vm.expectRevert(NFTMarket.BuyerCannotBeSeller.selector);
         market.buyNFT(1, NFT_PRICE);
         vm.stopPrank();
     }
@@ -273,7 +273,7 @@ contract NFTMarketTest is Test {
         vm.stopPrank();
 
         vm.startPrank(buyer);
-        vm.expectRevert("NFTMarket: caller is not seller");
+        vm.expectRevert(NFTMarket.CallerNotSeller.selector);
         market.cancelListing(1);
         vm.stopPrank();
     }
@@ -367,7 +367,7 @@ contract NFTMarketTest is Test {
         // 未被许可的 eve 尝试使用该签名购买
         vm.startPrank(eve);
         token.approve(address(market), NFT_PRICE);
-        vm.expectRevert("NFTMarket: invalid whitelist signature");
+        vm.expectRevert(NFTMarket.InvalidWhitelistSignature.selector);
         market.permitBuy(1, sigForBuyer);
         vm.stopPrank();
     }
@@ -384,7 +384,7 @@ contract NFTMarketTest is Test {
 
         vm.startPrank(buyer);
         token.approve(address(market), NFT_PRICE);
-        vm.expectRevert("NFTMarket: invalid whitelist signature");
+        vm.expectRevert(NFTMarket.InvalidWhitelistSignature.selector);
         market.permitBuy(1, forgedSig);
         vm.stopPrank();
     }
@@ -402,7 +402,7 @@ contract NFTMarketTest is Test {
         vm.startPrank(buyer);
         token.approve(address(market), NFT_PRICE);
         // 尝试用 tokenId = 2 的许可购买 tokenId = 1
-        vm.expectRevert("NFTMarket: invalid whitelist signature");
+        vm.expectRevert(NFTMarket.InvalidWhitelistSignature.selector);
         market.permitBuy(1, sigForToken2);
         vm.stopPrank();
     }
@@ -413,7 +413,7 @@ contract NFTMarketTest is Test {
 
         vm.startPrank(buyer);
         token.approve(address(market), NFT_PRICE);
-        vm.expectRevert("NFTMarket: NFT not listed");
+        vm.expectRevert(NFTMarket.NotListed.selector);
         market.permitBuy(999, sig);
         vm.stopPrank();
     }
