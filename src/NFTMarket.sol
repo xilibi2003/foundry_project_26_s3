@@ -4,19 +4,20 @@ pragma solidity ^0.8.24;
 import {SafeERC20, IERC20} from "@oz/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@oz/contracts/token/ERC721/IERC721.sol";
 import {IERC721Receiver} from "@oz/contracts/token/ERC721/IERC721Receiver.sol";
-import {EIP712} from "@oz/contracts/utils/cryptography/EIP712.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ECDSA} from "@oz/contracts/utils/cryptography/ECDSA.sol";
 import {CalledToken, ITokenReceiver} from "./CalledToken.sol";
 
 /**
  * @title NFTMarket
- * @dev 使用 CalledToken 买卖 ERC721 NFT 的去中心化市场合约
+ * @dev 使用 CalledToken 买卖 ERC721 NFT 的去中心化市场合约（V1 透明代理升级版）
  * 支持：
  * 1. 传统方式购买：先 approve 授权，再调用 buyNFT(tokenId, amount)
  * 2. 一步回调购买：CalledToken.transferAndCall(market, amount, abi.encode(tokenId)) 自动触发 tokensReceived 入账并完成购买
  * 3. 白名单离线授权购买：permitBuy() 校验管理员符合 EIP-712 标准的离线签名授权后才允许购买
  */
-contract NFTMarket is IERC721Receiver, ITokenReceiver, EIP712 {
+contract NFTMarket is Initializable, IERC721Receiver, ITokenReceiver, EIP712Upgradeable {
     using SafeERC20 for IERC20;
 
     // 自定义错误（Custom Errors）以降低部署字节码和执行 Gas
@@ -34,9 +35,9 @@ contract NFTMarket is IERC721Receiver, ITokenReceiver, EIP712 {
     error CallerNotSeller();
 
     // 绑定的支付代币合约（CalledToken）
-    CalledToken public immutable paymentToken;
+    CalledToken public paymentToken;
     // 绑定的 NFT 合约（MyERC721）
-    IERC721 public immutable nftContract;
+    IERC721 public nftContract;
 
     // 管理员地址（负责离线签发白名单授权）
     address public admin;
@@ -67,18 +68,35 @@ contract NFTMarket is IERC721Receiver, ITokenReceiver, EIP712 {
         _;
     }
 
-    /**
-     * @param _paymentToken 绑定的支付代币合约地址（CalledToken）
-     * @param _nftContract 绑定的 NFT 合约地址（MyERC721）
-     */
-    constructor(address _paymentToken, address _nftContract)
-        EIP712("NFTMarket", "1")
-    {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function __NFTMarket_init(address _paymentToken, address _nftContract, address _admin) internal onlyInitializing {
+        __EIP712_init("NFTMarket", "1");
         if (_paymentToken == address(0) || _nftContract == address(0)) revert ZeroAddress();
 
         paymentToken = CalledToken(_paymentToken);
         nftContract = IERC721(_nftContract);
-        admin = msg.sender;
+        admin = _admin == address(0) ? msg.sender : _admin;
+    }
+
+    /**
+     * @notice 初始化函数（透明代理部署时调用）
+     * @param _paymentToken 绑定的支付代币合约地址（CalledToken）
+     * @param _nftContract 绑定的 NFT 合约地址（MyERC721）
+     * @param _admin 管理员地址
+     */
+    function initialize(address _paymentToken, address _nftContract, address _admin) public initializer {
+        __NFTMarket_init(_paymentToken, _nftContract, _admin);
+    }
+
+    /**
+     * @notice 重载初始化函数（默认 msg.sender 为 admin）
+     */
+    function initialize(address _paymentToken, address _nftContract) external initializer {
+        __NFTMarket_init(_paymentToken, _nftContract, msg.sender);
     }
 
     /**

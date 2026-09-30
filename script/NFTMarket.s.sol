@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
+import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "./BaseScript.s.sol";
 import {NFTMarket} from "../src/NFTMarket.sol";
 import {CalledToken} from "../src/CalledToken.sol";
@@ -25,9 +26,20 @@ contract NFTMarketScript is BaseScript {
         console.log("MyERC721 deployed on %s", address(nft));
         saveContract("MyERC721", address(nft));
 
-        // 3. 部署 NFTMarket 合约并关联上述代币和 NFT
-        market = new NFTMarket(address(token), address(nft));
-        console.log("NFTMarket deployed on %s", address(market));
-        saveContract("NFTMarket", address(market));
+        // 3. 使用透明代理部署 NFTMarket 合约
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,address)",
+            address(token),
+            address(nft),
+            deployer
+        );
+        address proxy = Upgrades.deployTransparentProxy(
+            "NFTMarket.sol:NFTMarket",
+            deployer,
+            initData
+        );
+        market = NFTMarket(proxy);
+        console.log("NFTMarket Transparent Proxy deployed on %s", address(market));
+        saveContract("NFTMarket_Proxy", address(market));
     }
 }

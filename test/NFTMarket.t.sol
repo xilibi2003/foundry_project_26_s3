@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
+import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import {NFTMarket} from "../src/NFTMarket.sol";
 import {CalledToken} from "../src/CalledToken.sol";
 import {MyERC721} from "../src/MyERC721.sol";
@@ -11,6 +12,7 @@ contract NFTMarketTest is Test {
     CalledToken public token;
     MyERC721 public nft;
 
+    address public proxyAdminOwner = makeAddr("proxyAdminOwner");
     address public seller = makeAddr("seller");
     address public buyer = makeAddr("buyer");
     address public admin;
@@ -30,9 +32,19 @@ contract NFTMarketTest is Test {
         token = new CalledToken("CalledToken", "CTK");
         nft = new MyERC721();
 
-        // 部署市场合约，使用 CalledToken 作为支付代币
-        market = new NFTMarket(address(token), address(nft));
-        market.setAdmin(admin);
+        // 使用透明代理模式部署市场合约
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,address)",
+            address(token),
+            address(nft),
+            admin
+        );
+        address proxy = Upgrades.deployTransparentProxy(
+            "NFTMarket.sol:NFTMarket",
+            proxyAdminOwner,
+            initData
+        );
+        market = NFTMarket(proxy);
 
         // 给买家分配代币
         token.transfer(buyer, INITIAL_BALANCE);
