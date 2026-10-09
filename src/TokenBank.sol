@@ -6,6 +6,7 @@ import {
     IERC20Permit
 } from "@oz/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@oz/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@oz/contracts/access/Ownable.sol";
 import {ISignatureTransfer} from "./ISignatureTransfer.sol";
 
 /**
@@ -28,7 +29,7 @@ interface ITokenReceiver {
  * 2. EIP-2612 permit 签名授权入账（permitDeposit）
  * 3. Uniswap Permit2 SignatureTransfer 签名授权入账（depositWithPermit2）
  */
-contract TokenBank is ITokenReceiver {
+contract TokenBank is ITokenReceiver, Ownable {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable token;
@@ -58,7 +59,7 @@ contract TokenBank is ITokenReceiver {
     /**
      * @param _tokenAddress 绑定的 ERC20 Token 地址
      */
-    constructor(address _tokenAddress) {
+    constructor(address _tokenAddress) Ownable(msg.sender) {
         require(
             _tokenAddress != address(0),
             "TokenBank: token address cannot be zero"
@@ -357,6 +358,24 @@ contract TokenBank is ITokenReceiver {
      */
     function getBalance(address user) external view returns (uint256) {
         return balances[user];
+    }
+
+    /**
+     * @notice 判断 TokenBank 合约的代币余额是否大于 1000
+     * @return 当 token 余额大于 1000 时返回 true，否则返回 false
+     */
+    function shouldWithdraw() public view returns (bool) {
+        return token.balanceOf(address(this)) > 1000;
+    }
+
+    /**
+     * @notice 当 token 的余额大于 1000 时，提取一半的余额到 owner
+     */
+    function withdrawhalf() external {
+        require(shouldWithdraw(), "TokenBank: balance <= 1000");
+        uint256 totalBalance = token.balanceOf(address(this));
+        uint256 amountToWithdraw = totalBalance / 2;
+        token.safeTransfer(owner(), amountToWithdraw);
     }
 
     // ========================================================
