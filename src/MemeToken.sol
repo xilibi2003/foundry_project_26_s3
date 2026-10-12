@@ -16,6 +16,7 @@ contract MemeToken is ERC20, Initializable {
     uint256 public maxSupply;
     uint256 public perMint;
     address public factory;
+    uint256 public price;
 
     error OnlyFactory();
     error ExceedsMaxSupply(uint256 requested, uint256 available);
@@ -34,19 +35,22 @@ contract MemeToken is ERC20, Initializable {
      * @param maxSupply_ 最大发行总量
      * @param perMint_ 单次铸造数量
      * @param factory_ 工厂合约地址（具有 mint 权限）
+     * @param price_ 铸造/购买价格（ETH）
      */
     function initialize(
         string memory name_,
         string memory symbol_,
         uint256 maxSupply_,
         uint256 perMint_,
-        address factory_
+        address factory_,
+        uint256 price_
     ) external initializer {
         _tokenName = name_;
         _tokenSymbol = symbol_;
         maxSupply = maxSupply_;
         perMint = perMint_;
         factory = factory_;
+        price = price_;
     }
 
     /**
